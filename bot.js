@@ -1,7 +1,7 @@
 'use strict';
 /**
  * MrFunnehBuilder - 24/7 "make the server feel alive" bot (Render / GitHub ready)
- * - Can chage on first line on config
+ * - Locked to AUTUMNATED.joinmc.world
  * - Waits out queues, auto-reconnects with backoff
  * - Wanders, looks at players, waves, greets joiners, answers mentions,
  *   occasionally chats, eats, fights mobs, flees when hurt
@@ -14,12 +14,12 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 
 // ───────── CONFIG (env vars override) ─────────
-const HOST = 'AUTUMNATED.joinmc.world';
+const HOST = 'AUTUMNATED.joinmc.world'; // hard-locked
 const CFG = {
   port: 25565,
   username: process.env.MC_USERNAME || 'MrFunnehBuilder',
   version: process.env.MC_VERSION || '1.21.11',
-  auth: process.env.MC_AUTH || 'offline', 
+  auth: process.env.MC_AUTH || 'microsoft', // 'offline' if server is cracked
   reconnectMs: +(process.env.RECONNECT_MS || 30000),
   queueQuietMs: 20000,
   postSpawnGraceMs: 15000,
@@ -39,6 +39,9 @@ const SCHEDULED_LINES = [
 ];
 const GREETS = ['hey {p}!', 'welcome {p}!', 'yo {p}', 'o/ {p}'];
 const REPLIES = ['hey!', 'sup', 'yo', 'o/', 'whats up?', 'hi there'];
+
+const AUTH_PASS = process.env.AUTH_PASSWORD || 'fakebot11';
+const REG_FLAG = path.join(__dirname, 'auth', 'registered.flag'); // exists after first /register
 
 const QUEUE_REGEX = /\bqueue\b|position\s*(?:in|:|#)?\s*\d+|\bin line\b|you are (?:currently )?(?:number|#)\s*\d+|waiting (?:room|list)/i;
 const QUEUE_DONE_REGEX = /finished waiting|your turn|(?:sending|connecting|moving|teleporting) (?:you )?to/i;
@@ -87,11 +90,23 @@ function connect() {
   bot = b;
   b.loadPlugin(pathfinder);
   let ready = false;
+  let authSent = null, authTimer = null;
+  const sendAuth = (mode) => {
+    if (bot !== b || authSent === mode) return;
+    authSent = mode;
+    log(`Sending /${mode}`);
+    b.chat(`/${mode} ${AUTH_PASS}`);
+    if (mode === 'register') { try { fs.writeFileSync(REG_FLAG, '1'); } catch {} }
+  };
 
-  b.on('login', () => { connectedAt = Date.now(); });
+  b.on('login', () => { connectedAt = Date.now(); b.physicsEnabled = false; }); // no movement while in queue/lobby
   b.on('spawn', () => {
     if (bot !== b) return;
     lastSpawn = Date.now();
+    if (!authTimer) authTimer = setTimeout(() => {
+      if (authSent === null) sendAuth(fs.existsSync(REG_FLAG) ? 'login' : 'register');
+    }, 3000);
+    if (!alive) b.physicsEnabled = false;
     if (!ready) {
       ready = true;
       const m = new Movements(b);
@@ -104,6 +119,12 @@ function connect() {
 
   const onText = (t) => {
     if (bot !== b) return;
+    // auth hints from the server (also fixes things if the flag file was lost on redeploy)
+    if (/already (?:registered|have an account)|is already registered/i.test(t)) sendAuth('login');
+    else if (authSent === null) {
+      if (/\/login/i.test(t)) sendAuth('login');
+      else if (/\/register/i.test(t)) sendAuth('register');
+    }
     if (QUEUE_DONE_REGEX.test(t) && inQueue) { inQueue = false; lastSpawn = Date.now(); log('Queue done'); return; }
     if (QUEUE_REGEX.test(t)) {
       if (!inQueue) log('Queue detected, waiting');
@@ -158,6 +179,7 @@ function connect() {
 
 function goAlive(b) {
   alive = true; status = 'online';
+  b.physicsEnabled = true;
   anchor = anchor || b.entity.position.clone();
   const id = ++runId;
   log('In game, starting alive routine');
@@ -263,4 +285,4 @@ setInterval(() => {
 process.on('unhandledRejection', (e) => log('Unhandled:', e && e.message ? e.message : e));
 process.on('SIGTERM', () => { try { bot && bot.quit(); } catch {} setTimeout(() => process.exit(0), 500); });
 connect();
-       
+    
